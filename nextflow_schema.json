@@ -5,6 +5,7 @@
     "description": "Nextflow DSL2 pipeline for Oxford Nanopore Dorado basecalling.",
     "type": "object",
     "definitions": {
+
         "input_output_options": {
             "title": "Input/output options",
             "type": "object",
@@ -16,39 +17,331 @@
                     "type": "string",
                     "format": "path",
                     "fa_icon": "fas fa-folder-open",
-                    "description": "Path to directory containing pod5 files or barcode subfolders.",
-                    "help_text": "The pipeline auto-detects whether the directory contains flat pod5 files or barcode subfolders. If subfolders are found, each is processed as a separate parallel job."
+                    "description": "Path to directory containing POD5 files or barcode subfolders.",
+                    "help_text": "The pipeline auto-detects structure: if subdirectories are present each is processed as a separate parallel job; otherwise the whole directory is treated as a single sample."
                 },
                 "outdir": {
                     "type": "string",
                     "format": "directory-path",
                     "fa_icon": "fas fa-folder",
-                    "description": "Output directory for BAM files and logs.",
+                    "description": "Output directory.",
                     "default": "results"
                 }
             }
         },
+
         "basecalling_options": {
             "title": "Basecalling options",
             "type": "object",
             "fa_icon": "fas fa-dna",
-            "description": "Options controlling the Dorado basecalling model.",
+            "description": "Options controlling the Dorado basecalling model and core behaviour.",
             "properties": {
                 "model": {
                     "type": "string",
                     "fa_icon": "fas fa-cogs",
-                    "description": "Dorado basecalling model accuracy level.",
+                    "description": "Basecalling accuracy level or full versioned model name.",
                     "default": "hac",
-                    "enum": ["hac", "sup"],
-                    "help_text": "'hac' (High Accuracy) is faster; 'sup' (Super Accuracy) is more accurate but slower."
+                    "help_text": "Shorthand: 'fast' (fastest), 'hac' (high accuracy, recommended), 'sup' (super accuracy). Full model names are also accepted, e.g. 'dna_r10.4.1_e8.2_400bps_hac@v5.0.0'. Dorado resolves shorthand names against the POD5 metadata automatically."
+                },
+                "modified_bases": {
+                    "type": "string",
+                    "fa_icon": "fas fa-flask",
+                    "description": "Comma-separated list of modified base models to detect.",
+                    "help_text": "Examples: '5mCG_5hmCG' (CpG methylation and hydroxymethylation), '5mCG_5hmCG,6mA' (combined), '5mC_5hmC', '6mA'. Modification models are automatically paired with the chosen simplex model.",
+                    "default": null
+                },
+                "models_directory": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "fa_icon": "fas fa-database",
+                    "description": "Local directory to search for or cache downloaded models.",
+                    "help_text": "Can also be set via the DORADO_MODELS_DIRECTORY environment variable. Useful for offline HPC environments.",
+                    "default": null
+                },
+                "min_qscore": {
+                    "type": "integer",
+                    "fa_icon": "fas fa-filter",
+                    "description": "Minimum mean Q-score threshold. Reads below this value are discarded.",
+                    "default": 0,
+                    "minimum": 0,
+                    "help_text": "0 disables filtering. Common values: 8 (standard), 10 (high quality). Filtered reads are written to a separate 'failed' output when using --output-dir mode."
+                },
+                "estimate_poly_a": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-ruler-horizontal",
+                    "description": "Enable poly-A tail length estimation.",
+                    "default": false,
+                    "help_text": "Estimates the length of poly-A (and poly-T on the reverse strand) tails. Results are stored in the 'pt' BAM tag."
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-sitemap",
+                    "description": "Recursively scan the input directory for POD5 files.",
+                    "default": false,
+                    "help_text": "Useful when POD5 files are spread across nested subdirectories. When combined with the per-subdir parallelism of this pipeline, set recursive=false and let Nextflow manage the parallelism instead."
+                },
+                "read_ids": {
+                    "type": "string",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-list",
+                    "description": "Path to a newline-delimited file of read IDs to basecall.",
+                    "default": null,
+                    "help_text": "Only reads whose IDs appear in this file will be processed. Useful for targeted re-basecalling."
+                },
+                "max_reads": {
+                    "type": "integer",
+                    "fa_icon": "fas fa-sort-numeric-up",
+                    "description": "Maximum number of reads to basecall.",
+                    "default": null,
+                    "minimum": 1,
+                    "help_text": "Hard cap on reads processed per job. Useful for testing or subsampling."
+                },
+                "resume_from": {
+                    "type": "string",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-redo",
+                    "description": "Path to an existing partial BAM to resume basecalling from.",
+                    "default": null,
+                    "help_text": "Dorado will skip reads that already appear in this BAM, allowing interrupted jobs to be restarted efficiently."
+                },
+                "emit_moves": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-wave-square",
+                    "description": "Write the signal move table to the 'mv' BAM tag.",
+                    "default": false,
+                    "help_text": "Required by downstream tools that operate on the raw signal, such as Remora for modified base calling on existing data."
+                },
+                "emit_summary": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-file-alt",
+                    "description": "Write a sequencing_summary.txt file during basecalling.",
+                    "default": false,
+                    "help_text": "Generates a per-read summary file inline. An additional summary TSV is always produced by the DORADO_SUMMARY process after basecalling."
                 }
             }
         },
+
+        "output_format_options": {
+            "title": "Output format options",
+            "type": "object",
+            "fa_icon": "fas fa-file-export",
+            "description": "Control the output file format. Mutually exclusive; default is BAM.",
+            "properties": {
+                "emit_fastq": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-file-code",
+                    "description": "Output reads as FASTQ instead of BAM.",
+                    "default": false,
+                    "help_text": "FASTQ does not retain alignment information or extended tags (methylation, barcodes, move table). Summary and demux steps are skipped when this is enabled."
+                },
+                "emit_sam": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-file-code",
+                    "description": "Output reads as SAM instead of BAM.",
+                    "default": false
+                },
+                "emit_cram": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-file-archive",
+                    "description": "Output reads as CRAM instead of BAM.",
+                    "default": false,
+                    "help_text": "CRAM provides better compression than BAM. Requires a reference for optimal compression."
+                }
+            }
+        },
+
+        "alignment_options": {
+            "title": "Alignment options",
+            "type": "object",
+            "fa_icon": "fas fa-map-marked-alt",
+            "description": "Inline alignment to a reference genome during basecalling (via minimap2).",
+            "properties": {
+                "reference": {
+                    "type": "string",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-book",
+                    "description": "Path to reference FASTA, FASTQ, or pre-built .mmi index for inline alignment.",
+                    "default": null,
+                    "help_text": "When provided, Dorado pipes basecalled reads through minimap2 internally, producing aligned BAM output. Avoids a separate dorado aligner step."
+                },
+                "bed_file": {
+                    "type": "string",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-map",
+                    "description": "BED file of genomic regions. Overlap counts are written to the 'bh' BAM tag.",
+                    "default": null,
+                    "help_text": "Requires --reference to be set."
+                },
+                "mm2_opts": {
+                    "type": "string",
+                    "fa_icon": "fas fa-sliders-h",
+                    "description": "Custom minimap2 options, overriding the default 'lr:hq' preset.",
+                    "default": null,
+                    "help_text": "Example: '-k 15 -w 10'. Quote the value when passing on the command line: --mm2_opts '-k 15 -w 10'"
+                }
+            }
+        },
+
+        "trimming_options": {
+            "title": "Trimming options",
+            "type": "object",
+            "fa_icon": "fas fa-cut",
+            "description": "Control adapter and primer trimming of basecalled reads.",
+            "properties": {
+                "trim": {
+                    "type": "string",
+                    "fa_icon": "fas fa-cut",
+                    "description": "Trimming mode: adapters (default), all, or none.",
+                    "default": "adapters",
+                    "enum": ["adapters", "all", "none"],
+                    "help_text": "'adapters' trims sequencing adapters only. 'all' also trims primers and barcodes. 'none' disables all trimming. Note: when --kit_name is set, trimming is automatically disabled during basecalling to preserve barcodes for the demultiplexing step."
+                },
+                "no_trim": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-ban",
+                    "description": "Explicitly disable all trimming (equivalent to --trim none).",
+                    "default": false
+                }
+            }
+        },
+
+        "demultiplexing_options": {
+            "title": "Barcode demultiplexing options",
+            "type": "object",
+            "fa_icon": "fas fa-barcode",
+            "description": "Classify and split reads by barcode. Basecalling classifies reads inline; a separate DORADO_DEMUX step splits the output BAM into per-barcode files.",
+            "properties": {
+                "kit_name": {
+                    "type": "string",
+                    "fa_icon": "fas fa-barcode",
+                    "description": "Barcode kit name for demultiplexing.",
+                    "default": null,
+                    "help_text": "Examples: 'SQK-RBK114-96', 'SQK-NBD114-24', 'EXP-NBD114'. Supported kits: EXP-NBD103/104/114/114-24/196, SQK-16S024/114-24, SQK-RBK001/004/110-96/111-24/111-96/114-24/114-96, SQK-NBD111-24/111-96/114-24/114-96, and many others."
+                },
+                "barcode_both_ends": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-exchange-alt",
+                    "description": "Require a barcode on both ends of the read for classification.",
+                    "default": false,
+                    "help_text": "Increases classification confidence at the cost of fewer classified reads."
+                },
+                "barcode_arrangement": {
+                    "type": "string",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-file",
+                    "description": "Path to a custom barcode arrangement file.",
+                    "default": null
+                },
+                "barcode_sequences": {
+                    "type": "string",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-file",
+                    "description": "Path to a custom barcode sequences file.",
+                    "default": null
+                }
+            }
+        },
+
+        "duplex_options": {
+            "title": "Duplex basecalling options",
+            "type": "object",
+            "fa_icon": "fas fa-dna",
+            "description": "Duplex calling basecalls both template and complement strands together for higher accuracy.",
+            "properties": {
+                "duplex": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-random",
+                    "description": "Enable duplex basecalling.",
+                    "default": false,
+                    "help_text": "Uses dorado duplex instead of dorado basecaller. Output is always BAM. Not compatible with --correct."
+                },
+                "pairs_file": {
+                    "type": "string",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-file-csv",
+                    "description": "Path to a CSV file containing template/complement read ID pairs.",
+                    "default": null,
+                    "help_text": "If not provided, Dorado auto-detects pairs from the POD5 files. Providing a pairs file speeds up processing when pairs are already known."
+                }
+            }
+        },
+
+        "correction_options": {
+            "title": "Read error correction options",
+            "type": "object",
+            "fa_icon": "fas fa-wrench",
+            "description": "Single-read error correction using the HERRO deep-learning algorithm.",
+            "properties": {
+                "correct": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-tools",
+                    "description": "Run dorado correct on the basecalled reads.",
+                    "default": false,
+                    "help_text": "Requires >= 64 CPU cores, >= 256 GB RAM, and >= 32 GB GPU VRAM. Input reads should be >= 10 kbp with >= 30x coverage. Not compatible with --duplex."
+                },
+                "paf_file": {
+                    "type": "string",
+                    "format": "file-path",
+                    "fa_icon": "fas fa-file",
+                    "description": "Pre-computed PAF alignment file for dorado correct (skips the internal alignment step).",
+                    "default": null
+                }
+            }
+        },
+
+        "performance_options": {
+            "title": "Performance tuning options",
+            "type": "object",
+            "fa_icon": "fas fa-tachometer-alt",
+            "description": "GPU device selection, batching, and neural-network runner configuration for maximum throughput on large datasets.",
+            "properties": {
+                "device": {
+                    "type": "string",
+                    "fa_icon": "fas fa-microchip",
+                    "description": "Device for inference: null (auto), 'cuda:all', 'cuda:0', 'cuda:0,2', 'cpu', or 'metal'.",
+                    "default": null,
+                    "help_text": "null = Dorado auto-detects (uses GPU if available, otherwise CPU). 'cuda:all' uses every available NVIDIA GPU and is set automatically by the gpu profile. Specify individual indices (e.g. 'cuda:0,2') to exclude slower GPUs in heterogeneous systems."
+                },
+                "batchsize": {
+                    "type": "integer",
+                    "fa_icon": "fas fa-layer-group",
+                    "description": "Number of chunks per inference batch. 0 = auto-tune from available GPU memory.",
+                    "default": 0,
+                    "minimum": 0,
+                    "help_text": "Dorado benchmarks several batch sizes at startup and selects the fastest one. Only override if you need to reduce GPU memory usage."
+                },
+                "chunksize": {
+                    "type": "integer",
+                    "fa_icon": "fas fa-th",
+                    "description": "Chunk size in samples (default 10000).",
+                    "default": null,
+                    "minimum": 1000,
+                    "help_text": "Smaller chunks reduce peak GPU memory usage; larger chunks may improve accuracy on long homopolymers."
+                },
+                "overlap": {
+                    "type": "integer",
+                    "fa_icon": "fas fa-compress-arrows-alt",
+                    "description": "Overlap between consecutive chunks in samples (default 500).",
+                    "default": null,
+                    "minimum": 0,
+                    "help_text": "Increasing overlap improves accuracy at chunk boundaries at the cost of redundant computation."
+                },
+                "num_runners": {
+                    "type": "integer",
+                    "fa_icon": "fas fa-running",
+                    "description": "Number of parallel neural-network runners per device.",
+                    "default": null,
+                    "minimum": 1,
+                    "help_text": "null = Dorado auto-selects. Increasing this value can improve GPU utilisation. Each runner consumes additional GPU memory."
+                }
+            }
+        },
+
         "generic_options": {
             "title": "Generic options",
             "type": "object",
             "fa_icon": "fas fa-file-import",
-            "description": "Less common options for the pipeline.",
+            "description": "Less common pipeline options.",
             "properties": {
                 "help": {
                     "type": "boolean",
@@ -60,9 +353,17 @@
             }
         }
     },
+
     "allOf": [
-        { "$ref": "#/definitions/input_output_options" },
-        { "$ref": "#/definitions/basecalling_options" },
-        { "$ref": "#/definitions/generic_options" }
+        { "$ref": "#/definitions/input_output_options"    },
+        { "$ref": "#/definitions/basecalling_options"     },
+        { "$ref": "#/definitions/output_format_options"   },
+        { "$ref": "#/definitions/alignment_options"       },
+        { "$ref": "#/definitions/trimming_options"        },
+        { "$ref": "#/definitions/demultiplexing_options"  },
+        { "$ref": "#/definitions/duplex_options"          },
+        { "$ref": "#/definitions/correction_options"      },
+        { "$ref": "#/definitions/performance_options"     },
+        { "$ref": "#/definitions/generic_options"         }
     ]
 }
