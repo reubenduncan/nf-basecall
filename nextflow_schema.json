@@ -1,0 +1,68 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema",
+    "$id": "nextflow_schema.json",
+    "title": "Dorado Basecalling Pipeline - Parameters",
+    "description": "Nextflow DSL2 pipeline for Oxford Nanopore Dorado basecalling.",
+    "type": "object",
+    "definitions": {
+        "input_output_options": {
+            "title": "Input/output options",
+            "type": "object",
+            "fa_icon": "fas fa-terminal",
+            "description": "Define where the pipeline should find input data and save output data.",
+            "required": ["input"],
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "format": "path",
+                    "fa_icon": "fas fa-folder-open",
+                    "description": "Path to directory containing pod5 files or barcode subfolders.",
+                    "help_text": "The pipeline auto-detects whether the directory contains flat pod5 files or barcode subfolders. If subfolders are found, each is processed as a separate parallel job."
+                },
+                "outdir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "fa_icon": "fas fa-folder",
+                    "description": "Output directory for BAM files and logs.",
+                    "default": "results"
+                }
+            }
+        },
+        "basecalling_options": {
+            "title": "Basecalling options",
+            "type": "object",
+            "fa_icon": "fas fa-dna",
+            "description": "Options controlling the Dorado basecalling model.",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "fa_icon": "fas fa-cogs",
+                    "description": "Dorado basecalling model accuracy level.",
+                    "default": "hac",
+                    "enum": ["hac", "sup"],
+                    "help_text": "'hac' (High Accuracy) is faster; 'sup' (Super Accuracy) is more accurate but slower."
+                }
+            }
+        },
+        "generic_options": {
+            "title": "Generic options",
+            "type": "object",
+            "fa_icon": "fas fa-file-import",
+            "description": "Less common options for the pipeline.",
+            "properties": {
+                "help": {
+                    "type": "boolean",
+                    "fa_icon": "fas fa-question-circle",
+                    "description": "Display help text.",
+                    "hidden": true,
+                    "default": false
+                }
+            }
+        }
+    },
+    "allOf": [
+        { "$ref": "#/definitions/input_output_options" },
+        { "$ref": "#/definitions/basecalling_options" },
+        { "$ref": "#/definitions/generic_options" }
+    ]
+}
